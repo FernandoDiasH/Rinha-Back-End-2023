@@ -1,0 +1,17 @@
+FROM postgres:16.3
+
+COPY base.sql /docker-entrypoint-initdb.d
+
+ENV SHAREDIR=/usr/share/postgresql/16
+
+RUN ls ${SHAREDIR}
+
+COPY brazilian.* ${SHAREDIR}/tsearch_data/
+
+RUN apt update
+RUN apt install -y hunspell-pt-br mlocate vim 
+
+RUN iconv -f latin1 -t UTF-8 /usr/share/hunspell/pt_BR.aff | sed 's/FLAG UTF-8//' | tee $SHAREDIR/tsearch_data/brazilian.affix
+RUN iconv -f latin1 -t UTF-8 /usr/share/hunspell/pt_BR.dic | tee $SHAREDIR/tsearch_data/brazilian.dict
+
+EXPOSE 5432

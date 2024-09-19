@@ -1,0 +1,149 @@
+
+```bash
+
+apt install -y vim  mlocate
+
+export SHAREDIR=/usr/share/postgresql/16
+
+echo "capassete capacete" |  tee -a $SHAREDIR/tsearch_data/brazilian.syn
+echo "gerenciamento gestão" |  tee -a $SHAREDIR/tsearch_data/brazilian.syn
+
+echo "gerenciamento ? negócios : gestão
+administração ? empresas : gestão
+protetor ? cabeça : capacete
+capassete : capacete" |  tee -a $SHAREDIR/tsearch_data/brazilian.ths
+
+apt install hunspell-pt-br
+iconv -f latin1 -t UTF-8 /usr/share/hunspell/pt_BR.aff | tee $SHAREDIR/tsearch_data/brazilian.affix
+iconv -f latin1 -t UTF-8 /usr/share/hunspell/pt_BR.dic | tee $SHAREDIR/tsearch_data/brazilian.dict
+```
+
+
+banco de dados
+
+```sql
+
+DROP TEXT SEARCH DICTIONARY IF EXISTS dict_simple_ptbr CASCADE;
+CREATE TEXT SEARCH DICTIONARY public.dict_simple_ptbr (
+    TEMPLATE = pg_catalog.simple,
+    STOPWORDS = portuguese,
+    Accept = false
+);
+
+-- Comentado porque vou utilizar o Thesaurus ao invés desse
+-- DROP TEXT SEARCH DICTIONARY IF EXISTS dict_synonyms_ptbr CASCADE;
+-- CREATE TEXT SEARCH DICTIONARY dict_synonyms_ptbr (
+--   TEMPLATE = synonym, 
+--   SYNONYMS = brazilian
+--);
+
+DROP TEXT SEARCH DICTIONARY IF EXISTS dict_thesaurus_ptbr CASCADE;
+CREATE TEXT SEARCH DICTIONARY dict_thesaurus_ptbr (
+  TEMPLATE = thesaurus, 
+  DictFile = brazilian, 
+  Dictionary = pg_catalog.portuguese_stem
+);
+
+DROP TEXT SEARCH DICTIONARY IF EXISTS dict_ispell_ptbr CASCADE;
+CREATE TEXT SEARCH DICTIONARY dict_ispell_ptbr (
+  TEMPLATE = ispell,
+  DictFile = brazilian,
+  AffFile = brazilian,
+  StopWords = portuguese
+);
+
+DROP TEXT SEARCH DICTIONARY IF EXISTS    CASCADE;
+CREATE TEXT SEARCH DICTIONARY dict_snowball_ptbr (
+  TEMPLATE = snowball,
+  Language = portuguese,
+  StopWords = portuguese
+);
+
+```
+
+No arquivo brazilian.affix trocar a flag de UTF-8 para long, num ou default
+
+
+```sql
+CREATE EXTENSION unaccent;
+
+DROP TEXT SEARCH CONFIGURATION IF EXISTS ecommerce CASCADE;
+
+CREATE TEXT SEARCH CONFIGURATION ecommerce (COPY=pg_catalog.portuguese);
+
+ALTER TEXT SEARCH CONFIGURATION ecommerce ALTER MAPPING FOR asciiword, asciihword, hword_asciipart, word, hword, hword_part
+    WITH unaccent, dict_thesaurus_ptbr, portuguese_stem, dict_simple_ptbr, dict_ispell_ptbr, dict_snowball_ptbr;
+
+CREATE TABLE items (
+    id SERIAL PRIMARY KEY,
+    name TEXT,
+    description TEXT,
+    keywords TEXT,
+    document TSVECTOR
+);
+CREATE INDEX idx_items_document ON items USING GIN(document);
+
+
+CREATE OR REPLACE FUNCTION update_items_document() RETURNS trigger AS 
+$$
+BEGIN
+  new.document := 
+    setweight(to_tsvector('ecommerce', unaccent(coalesce(new.name, ''))), 'A') ||
+    setweight(to_tsvector('ecommerce', unaccent(coalesce(new.description, ''))), 'B') ||
+    setweight(to_tsvector('ecommerce', unaccent(coalesce(new.keywords, ''))), 'C');
+  RETURN new;
+END
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS tg_update_items_document ON items;
+CREATE TRIGGER tg_update_items_document BEFORE INSERT OR UPDATE ON items FOR EACH ROW EXECUTE PROCEDURE update_items_document();
+
+CREATE OR REPLACE FUNCTION ecommerce_tsquery(word text) RETURNS tsquery AS 
+$$
+BEGIN
+  RETURN plainto_tsquery('ecommerce', unaccent(trim(word)));
+END
+$$ LANGUAGE plpgsql;
+
+
+
+INSERT INTO items (name, description, keywords) VALUES
+('Inteligência de mercado', 'Estudos de Inserção Estudos de viabilidade técnica e econômica Estudos de Benchmarking -Análise da concorrência -Panorama Regional -Estudos de atração de investimentos', 'estudo econômico análise estratégia investimentos'),
+('Gestão e Inovação', 'Modelagem e Plano de Negócios gerenciamento -Planejamento Estratégico -Reestruturação Organizacional Estrutura Comercial -Mapeamento de Processos -KPIs e painéis -Gestão CRC e outros cadastros', 'plano de negócios estrutura organizacional processos customer'),
+('Eventos', 'Rodadas de Negócios entre compradoras e fornecedoras presencial ou online -Sessões de negócios entre fornecedoras presencial ou online', 'apresentações power point'),
+('Capacete', 'Desenhado para proteger a cabeça contra impacto de objetos em queda livre. ✓ Possui 8 tiras de fixação em 8 pontos de ancoragem. ✓ Design inteligente que permite ancoragem de diversos sistemas', 'proteção para cabeça'),
+('Treinamentos', 'Treinamentos in company relacionados a inovação e gestão, como: - Design Thinking - Cadastro de fornecedores - Inovação', 'elearning ead informática computação');
+
+```
+
+
+
+## Buscas utilizando o full text search
+
+```sql
+-- busca ignorando acentuação
+SELECT * FROM items WHERE document @@ ecommerce_tsquery('inovacao');
+
+-- busca por sinônimo
+SELECT * FROM items WHERE document @@ ecommerce_tsquery('capassete');
+
+-- busca por sinônimo usando frase
+SELECT * FROM items WHERE document @@ ecommerce_tsquery('protetor de cabeça');
+
+-- busca retorna apenas com o ranking A ou B
+SELECT * FROM items WHERE ts_filter(document, '{a,b}') @@ ecommerce_tsquery('capacete');
+
+-- retorna o termo achado com marcação negrito <b></b> do HTML
+SELECT *, ts_headline('public.ecommerce', description, ecommerce_tsquery('protege a cabeça'), 'StartSel = <b>,StopSel =</b>')
+FROM items
+WHERE document @@ ecommerce_tsquery('protege a cabeça');
+
+-- busca por treinamentos e company podendo ter no mínimo 2 palavras de distância
+SELECT * FROM items WHERE document @@ to_tsquery('public.ecommerce', 'treinamentos <2> company');
+
+-- orderna pelo resultado mais relevante
+SELECT id, name, ts_rank_cd(document, ecommerce_tsquery('gestão')) AS ranking
+FROM items
+WHERE document @@ ecommerce_tsquery('gestão')
+ORDER BY ts_rank_cd(document, ecommerce_tsquery('gestão')) DESC;
+```

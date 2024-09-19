@@ -1,0 +1,77 @@
+# version: '3.9'
+services:
+  api1: # API - Instância 01  
+    build: 
+      context: ./
+    hostname: api1
+    depends_on:
+      - db
+    environment:
+      DB_HOST: 'db'
+      DB_USER: 'rinha'
+      DB_PASSWORD: 'password'
+      DB_DATABASE: 'rinha'
+      DB_PORT: 5432
+    volumes:
+      - ./:/home/node/app
+    ports:
+      - "3000:3000"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: '0.5GB'
+
+  api2: # API - Instância 01  
+    build: 
+      context: ./
+    hostname: api1
+    depends_on:
+      - db
+    environment:
+      DB_HOST: 'db'
+      DB_USER: 'rinha'
+      DB_PASSWORD: 'password'
+      DB_DATABASE: 'rinha'
+      DB_PORT: 5432
+    volumes:
+      - ./:/home/node/app
+    ports:
+      - "3001:3000"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: '0.5GB'
+
+  nginx: # Load Balancer
+    image: nginx:1.27.0-bookworm
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api1
+      # - api2
+    ports:
+      - "9999:9999"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: '0.5GB'
+
+  db: # Banco de dados
+    build:
+      context: ./docker/db/
+    environment:
+      POSTGRES_USER: 'rinha'
+      POSTGRES_PASSWORD: 'password'
+      POSTGRES_DB: 'rinha'
+    # volumes:
+    #   - ./docker/db/base.sql:/docker-entrypoint-initdb.d/base.sql
+    ports:
+      - 5432:5432
+    deploy:
+      resources:
+        limits:
+          cpus: '0.75'
+          memory: '1.5GB'
